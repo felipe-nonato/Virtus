@@ -1,0 +1,9 @@
+../Core/Src/main.c:61:6:Enviar_Byte	32	static
+../Core/Src/main.c:80:9:Receber_Byte_Com_Checksum	32	static
+../Core/Src/main.c:102:6:Piscar_Byte_Recebido	24	static
+../Core/Src/main.c:120:6:Estabelecer_Conexao	24	static
+../Core/Src/main.c:205:5:main	8	static
+../Core/Src/main.c:252:6:SystemClock_Config	72	static
+../Core/Src/main.c:289:13:MX_GPIO_Init	40	static
+../Core/Src/main.c:342:6:HAL_GPIO_EXTI_Callback	16	static
+../Core/Src/main.c:361:6:Error_Handler	4	static,ignoring_inline_asm
