@@ -18,7 +18,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <stdlib.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -43,7 +43,7 @@
 volatile uint8_t master = 0;
 volatile uint8_t conexao_estabelecida = 0;
 volatile uint8_t dado_recebido = 0;
-
+uint8_t buffer_tx[100]; // Buffer com os 100 números
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -57,140 +57,160 @@ static void MX_GPIO_Init(void);
 /* USER CODE BEGIN 0 */
 /* USER CODE BEGIN 4 */
 
-// Envia 1 byte bit a bit + Checksum
+/**
+ * @brief Gera um número pseudoaleatório de 8 bits (0 a 255)
+ */
+uint8_t Gerar_Byte_Aleatorio(void) {
+    return (uint8_t)(rand() % 256);
+}
+
+// Envia 1 byte bit a bit + Checksum (COM START BIT)
 void Enviar_Byte(uint8_t dado) {
     uint8_t pacote[2];
     pacote[0] = dado;
-    pacote[1] = (uint8_t)(~dado); // Checksum simples (NOT bit a bit)
+    pacote[1] = (uint8_t)(~dado);
 
-    for (int j = 0; j < 2; j++) { // Envia o dado e depois o checksum
+    // --- START BIT ---
+    // Avisa o Slave que a transmissão vai começar cravada neste milissegundo
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET);
+    HAL_Delay(5);
+
+    // Envia os 16 bits
+    for (int j = 0; j < 2; j++) {
         for (int i = 0; i < 8; i++) {
             if ((pacote[j] >> i) & 0x01) {
                 HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET);
             } else {
                 HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET);
             }
-            HAL_Delay(5); // Tempo de bit (5ms para estabilidade)
+            HAL_Delay(5);
         }
     }
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET); // Garante linha em IDLE (HIGH)
+    // STOP BIT / IDLE
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET);
+    HAL_Delay(10); // Margem de segurança
 }
 
-// Recebe 1 byte bit a bit e valida Checksum
+// Recebe 1 byte bit a bit (ESPERANDO O START BIT)
 uint8_t Receber_Byte_Com_Checksum(uint8_t *destino) {
     uint8_t buffer[2] = {0, 0};
 
+    // Aguarda o Start Bit do Master (linha caindo para LOW)
+    uint32_t t = HAL_GetTick();
+    while(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_SET) {
+        if (HAL_GetTick() - t > 100) return 0; // Timeout de segurança
+    }
+
+    // A linha caiu! Sincronizamos o relógio.
+    // Esperamos 7ms para ler bem no centro do primeiro bit de dados.
+    HAL_Delay(7);
+
     for (int j = 0; j < 2; j++) {
         for (int i = 0; i < 8; i++) {
-            HAL_Delay(2); // Amostra no meio do bit (bit tem 5ms)
             if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_SET) {
                 buffer[j] |= (1 << i);
             }
-            HAL_Delay(3); // Completa o tempo do bit
+            HAL_Delay(5); // Pula de 5 em 5ms cravados
         }
     }
 
-    // Validação: Dado + Checksum deve resultar em 0xFF (255) se for Complemento de 1
     if ((uint8_t)(buffer[0] + buffer[1]) == 0xFF) {
         *destino = buffer[0];
-        return 1; // Sucesso
+        return 1;
     }
-    return 0; // Erro de Checksum
+    return 0;
 }
-
 
 void Piscar_Byte_Recebido(uint8_t dado) {
     for (int i = 0; i < 8; i++) {
-        // Verifica o bit na posição i (do menos significativo para o mais significativo)
         if ((dado >> i) & 0x01) {
-            // Se o bit for 1: piscada longa
-            HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET); // Liga LED
-            HAL_Delay(600);
+            HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
+            HAL_Delay(100);
         } else {
-            // Se o bit for 0: piscada curta
-            HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET); // Liga LED
-            HAL_Delay(200);
+            HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
+            HAL_Delay(20);
         }
-
-        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);   // Desliga LED
-        HAL_Delay(300); // Intervalo entre os bits para o olho humano acompanhar
+        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
+        HAL_Delay(50);
     }
 }
 
 void Estabelecer_Conexao(void) {
     if (master == 1) {
-        // --- HANDSHAKE MASTER ---
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET);
-        HAL_Delay(50);
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET);
+        for (int iteracao = 0; iteracao < 100; iteracao++) {
 
-        HAL_Delay(10);
+            // --- HANDSHAKE MASTER ---
+            HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET);
+            HAL_Delay(50);
+            HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET);
 
-        conexao_estabelecida = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_RESET;
-        if (conexao_estabelecida) {
-            HAL_Delay(20);
-
-            // Liga o LED indicando que a transmissão começou
-            HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
-
-            // --- ENVIO DE DADO ---
-            Enviar_Byte(0xAB);
-
-            // --- AGUARDAR FINAL ACK DO SLAVE ---
-            // O Master fica em loop até o Slave avisar que terminou de piscar
-            uint32_t timeout = HAL_GetTick();
-            while(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_SET) {
-                // Timeout de 10 segundos para não travar o Master caso o Slave desconecte
-                if (HAL_GetTick() - timeout > 10000) break;
+            uint32_t t_sync = HAL_GetTick();
+            conexao_estabelecida = 0;
+            while (HAL_GetTick() - t_sync < 100) {
+                if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_RESET) {
+                    conexao_estabelecida = 1;
+                    break;
+                }
             }
 
-            // Assim que detectar o sinal do Slave, apaga o LED
-            HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
-            HAL_Delay(500); // Tempo de segurança antes de liberar o modo master
+            if (conexao_estabelecida) {
+                // Espera o Slave terminar o ACK
+                while(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_RESET);
 
-        } else {
-            // Erro de handshake
-            for(uint8_t i = 0; i < 3; i++){
-                HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
-                HAL_Delay(100);
+                HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET); // Liga LED do Mestre
+                HAL_Delay(10); // Sincronia antes de mandar os bits
+
+                Enviar_Byte(buffer_tx[iteracao]);
+
+                // --- AGUARDAR FINAL ACK ---
+                uint32_t timeout = HAL_GetTick();
+                while(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_SET) {
+                    if (HAL_GetTick() - timeout > 10000) break; // Timeout longo (10s)
+                }
+
+                while(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_RESET);
+
+                HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET); // Apaga LED do Mestre
+                HAL_Delay(50); // Fôlego para o próximo byte
+
+            } else {
+                for(uint8_t i = 0; i < 3; i++){
+                    HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+                    HAL_Delay(100);
+                }
+                HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
+                break;
             }
-            HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
         }
         master = 0;
     }
     else {
         // --- COMPORTAMENTO SLAVE ---
         if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_RESET) {
-            // 1. Responde Handshake (ACK)
+
+            while(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_RESET);
+
             HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET);
             HAL_Delay(50);
             HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET);
 
-            // 2. Recebe o dado
-            HAL_Delay(7);
             if (Receber_Byte_Com_Checksum((uint8_t*)&dado_recebido)) {
-
-                // 3. Pisca a sequência
                 Piscar_Byte_Recebido(dado_recebido);
-
-                // --- NOVO: FINAL ACK ---
-                // Avisa ao Master: "Já terminei de piscar, pode apagar seu LED"
-                HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET);
-                HAL_Delay(100); // Pulso de confirmação final
-                HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET);
-
             } else {
-                // Erro de Checksum
                 for(int i=0; i<10; i++) {
                     HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
                     HAL_Delay(50);
                 }
             }
 
-            // Espera a linha voltar ao repouso
+            // --- FINAL ACK GARANTIDO ---
+            // Enviamos independente de dar certo ou errado, pro Mestre ser liberado!
+            HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET);
+            HAL_Delay(50);
+            HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET);
+
             while(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_RESET);
             HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
-            HAL_Delay(100);
         }
     }
 }
@@ -228,7 +248,11 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   /* USER CODE BEGIN 2 */
-
+  srand(HAL_GetTick());
+  // Preenche o buffer com números de 0 a 99
+    for(int i = 0; i < 100; i++) {
+        buffer_tx[i] = Gerar_Byte_Aleatorio();;
+    }
   /* USER CODE END 2 */
 
   /* Infinite loop */
