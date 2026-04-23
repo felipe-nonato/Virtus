@@ -12,7 +12,11 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "stdio.h"
+#include "math.h"
 #include "MPU6050.h"
+#include "ssd1306.h"
+#include "ssd1306_fonts.h"
+#include "sprites.h" // SUA NOVA BIBLIOTECA DE IMAGENS
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -22,7 +26,9 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define RAD_TO_DEG 57.2957795131
+#define ALPHA 0.98
+#define DT 0.1  // 100ms delay = 0.1s
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -31,11 +37,16 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-I2C_HandleTypeDef hi2c1;
 
 /* USER CODE BEGIN PV */
+I2C_HandleTypeDef hi2c1;
 float ax, ay, az;
 float gx, gy, gz;
+
+// Filtered Angles
+float pitch = 0.0;
+float roll = 0.0;
+float yaw = 0.0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -49,6 +60,28 @@ static void MX_I2C1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+// Função para mapear o Pitch, Roll e Yaw para os 16 sprites do seu arquivo sprites.h
+const uint8_t* Get_Plane_Sprite(float p, float r, float y) {
+    // 1. Normaliza o Yaw para garantir que ele sempre fique entre -180 e +180 graus
+    float yaw_norm = fmod(y, 360.0);
+    if (yaw_norm > 180.0) yaw_norm -= 360.0;
+    if (yaw_norm < -180.0) yaw_norm += 360.0;
+
+    // 2. Pitch define se o bico está pra cima (U) ou pra baixo (D)
+    int is_up = (p >= 0.0);
+
+    // 3. Yaw define a direção (Rosa dos Ventos)
+    if (yaw_norm > -22.5 && yaw_norm <= 22.5)   return is_up ? NU  : ND;   // Norte
+    if (yaw_norm > 22.5 && yaw_norm <= 67.5)    return is_up ? NEU : NED;  // Nordeste
+    if (yaw_norm > 67.5 && yaw_norm <= 112.5)   return is_up ? EU  : ED;   // Leste
+    if (yaw_norm > 112.5 && yaw_norm <= 157.5)  return is_up ? SEU : SED;  // Sudeste
+    if (yaw_norm > 157.5 || yaw_norm <= -157.5) return is_up ? SU  : SD;   // Sul
+    if (yaw_norm > -157.5 && yaw_norm <= -112.5)return is_up ? SWU : SWD;  // Sudoeste
+    if (yaw_norm > -112.5 && yaw_norm <= -67.5) return is_up ? WU  : WD;   // Oeste
+    if (yaw_norm > -67.5 && yaw_norm <= -22.5)  return is_up ? NWU : NWD;  // Noroeste
+
+    return NU; // Fallback de segurança
+}
 /* USER CODE END 0 */
 
 /**
@@ -57,46 +90,72 @@ static void MX_I2C1_Init(void);
   */
 int main(void)
 {
-
-  /* USER CODE BEGIN 1 */
-
-  /* USER CODE END 1 */
-
   /* MCU Configuration--------------------------------------------------------*/
-
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
-
-  /* USER CODE BEGIN Init */
-
-  /* USER CODE END Init */
-
-  /* Configure the system clock */
   SystemClock_Config();
-
-  /* USER CODE BEGIN SysInit */
-
-  /* USER CODE END SysInit */
-
-  /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_I2C1_Init();
-  /* USER CODE BEGIN 2 */
-  // Variables to hold the sensor data
 
-  // Initialize the MPU6050 sensor
+  /* USER CODE BEGIN 2 */
   MPU6050_init();
+
+  ssd1306_Init();
+  ssd1306_Fill(0);
+  ssd1306_UpdateScreen();
+
+  char buffer[32];
+  int display_timer = 0; // Contador para controlar os 3 segundos
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    // Read accelerometer and gyroscope data
+    // Leitura contínua dos dados a cada 100ms para não estragar o filtro
     MPU6050_Read_Accel(&ax, &ay, &az);
     MPU6050_Read_Gyro(&gx, &gy, &gz);
 
-    // Add a small delay to avoid reading too rapidly
+    float accel_pitch = atan2(ax, sqrt(ay * ay + az * az)) * RAD_TO_DEG;
+    float accel_roll = atan2(ay, sqrt(ax * ax + az * az)) * RAD_TO_DEG;
+
+    pitch = ALPHA * (pitch + gx * DT) + (1.0 - ALPHA) * accel_pitch;
+    roll = ALPHA * (roll + gy * DT) + (1.0 - ALPHA) * accel_roll;
+    yaw = yaw + gz * DT;
+
+    // LÓGICA DO TEMPORIZADOR DO DISPLAY (3 Segundos)
+    display_timer++;
+    if(display_timer >= 60) display_timer = 0; // Reseta após 6 segundos (60 * 100ms)
+
+    ssd1306_Fill(0); // Limpa a tela
+
+    if (display_timer < 30)
+    {
+      // PRIMEIROS 3 SEGUNDOS: MOSTRAR O DESENHO DO AVIÃO
+    	// PRIMEIROS 3 SEGUNDOS: MOSTRAR O DESENHO DO AVIÃO
+    	const uint8_t *current_sprite = Get_Plane_Sprite(pitch, roll, yaw);
+
+      // Centraliza a imagem 60x60 no display 128x64 (X=34, Y=2)
+      ssd1306_DrawBitmap(34, 2, current_sprite, 60, 60, 1);
+    }
+    else
+    {
+      // PRÓXIMOS 3 SEGUNDOS: MOSTRAR OS STATUS (TEXTO)
+      sprintf(buffer, "R:%.0f P:%.0f", roll, pitch);
+      ssd1306_SetCursor(2, 2);
+      ssd1306_WriteString(buffer, Font_7x10, 1);
+
+      sprintf(buffer, "A:%.1f %.1f %.1f", ax, ay, az);
+      ssd1306_SetCursor(2, 16);
+      ssd1306_WriteString(buffer, Font_7x10, 1);
+
+      sprintf(buffer, "G:%.0f %.0f %.0f", gx, gy, gz);
+      ssd1306_SetCursor(2, 30);
+      ssd1306_WriteString(buffer, Font_7x10, 1);
+    }
+
+    ssd1306_UpdateScreen(); // Atualiza o painel OLED
+
+    // Delay exato de 100ms para manter o 'DT' do filtro complementar correto
     HAL_Delay(100);
     /* USER CODE END WHILE */
 
@@ -114,9 +173,6 @@ void SystemClock_Config(void)
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
-  /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
@@ -126,8 +182,6 @@ void SystemClock_Config(void)
     Error_Handler();
   }
 
-  /** Initializes the CPU, AHB and APB buses clocks
-  */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
@@ -143,21 +197,11 @@ void SystemClock_Config(void)
 
 /**
   * @brief I2C1 Initialization Function
-  * @param None
-  * @retval None
   */
 static void MX_I2C1_Init(void)
 {
-
-  /* USER CODE BEGIN I2C1_Init 0 */
-
-  /* USER CODE END I2C1_Init 0 */
-
-  /* USER CODE BEGIN I2C1_Init 1 */
-
-  /* USER CODE END I2C1_Init 1 */
   hi2c1.Instance = I2C1;
-  hi2c1.Init.ClockSpeed = 100000;
+  hi2c1.Init.ClockSpeed = 400000;
   hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
   hi2c1.Init.OwnAddress1 = 0;
   hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
@@ -169,64 +213,25 @@ static void MX_I2C1_Init(void)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN I2C1_Init 2 */
-
-  /* USER CODE END I2C1_Init 2 */
-
 }
 
-/**
-  * @brief GPIO Initialization Function
-  * @param None
-  * @retval None
-  */
 static void MX_GPIO_Init(void)
 {
-  /* USER CODE BEGIN MX_GPIO_Init_1 */
-
-  /* USER CODE END MX_GPIO_Init_1 */
-
-  /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOD_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
-
-  /* USER CODE BEGIN MX_GPIO_Init_2 */
-
-  /* USER CODE END MX_GPIO_Init_2 */
 }
 
-/* USER CODE BEGIN 4 */
-
-/* USER CODE END 4 */
-
-/**
-  * @brief  This function is executed in case of error occurrence.
-  * @retval None
-  */
 void Error_Handler(void)
 {
-  /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
   while (1)
   {
   }
-  /* USER CODE END Error_Handler_Debug */
 }
+
 #ifdef USE_FULL_ASSERT
-/**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
 void assert_failed(uint8_t *file, uint32_t line)
 {
-  /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
-  /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
