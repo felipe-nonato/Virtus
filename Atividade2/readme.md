@@ -1,7 +1,7 @@
 
 # Capacitação VIRTUS-CC: FreeRTOS - Atividade Prática
 
-**Repositório Oficial:** [https://github.com/felipe-nonato/Virtus/Atividade2](https://github.com/felipe-nonato/Virtus/edit/main/Atividade2)
+**Repositório Oficial:** [https://github.com/felipe-nonato/Virtus/Atividade2](https://github.com/felipe-nonato/Virtus/Atividade2)
 
 ## 📌 Sobre o Projeto
 Este projeto integra as atividades práticas da Capacitação VIRTUS-CC em Sistemas Embarcados. O objetivo principal é demonstrar na prática a utilização do sistema operacional de tempo real **FreeRTOS** (via API CMSIS-RTOS v2) em microcontroladores STM32, focando em:
